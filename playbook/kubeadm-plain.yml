@@ -1,0 +1,132 @@
+---
+- name: Install Common
+  hosts: controlplane, worker
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Load br_netfilter module
+      shell: |
+        cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+        br_netfilter
+        EOF
+
+    - name: Configure iptables to see bridged traffic
+      shell: |
+        cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.bridge.bridge-nf-call-iptables = 1
+        EOF
+
+    - name: Read values from all system directories
+      shell: |
+        sudo sysctl --system
+      
+    - name: Install packages to allow apt to use a repository over HTTPS
+      apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - apt-transport-https
+          - curl
+        state: present
+
+    # - name: Add Docker apt repository
+    #   shell: |
+    #     curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    #     echo \
+    #       "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian \
+    #       $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    - name: Install Container Engine
+      shell: |
+        sudo apt install containerd -y
+        mkdir /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+        systemctl restart containerd
+
+    # - name: Configure Docker Engine
+    #   shell: |
+    #     cat <<EOF | sudo tee /etc/docker/daemon.json
+    #     {
+    #       "exec-opts": ["native.cgroupdriver=systemd"],
+    #       "log-driver": "json-file",
+    #       "log-opts": {
+    #         "max-size": "100m"
+    #       },
+    #       "storage-driver": "overlay2"
+    #     }
+    #     EOF
+
+    # - name: Restart Docker
+    #   systemd:
+    #     name: docker
+    #     state: restarted
+    #     enabled: yes
+    #     daemon-reload: yes
+
+    - name: Add Google Cloud public signing key & Kubernetes repository
+      shell: |
+        mkdir -p /etc/apt/keyrings
+
+        curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Install kubelet, kubeadm and kubectl
+      shell: |
+        sudo apt-get install -y kubelet=1.27.0-00 kubeadm=1.27.0-00 kubectl=1.27.0-00
+
+    - name: Enable kubelet service
+      service:
+        name: kubelet
+        enabled: yes
+
+# - name: Install controlplane components
+#   hosts: controlplane
+#   gather_facts: true
+#   become: true
+#   tasks:
+#     - name: Install controlplane components
+#       shell: |
+#         #!/bin/bash
+#         echo "|x| Initializing cluster controlplane..."
+#         echo "--------"
+#     - name: Init kubernetes cluster
+#       shell: |
+#         kubeadm init --apiserver-cert-extra-sans=controlplane --apiserver-advertise-address 172.16.1.11 --pod-network-cidr=10.244.0.0/16
+
+#     - name: Update kubeconfig
+#       shell: |
+#         mkdir -p $HOME/.kube
+#         sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+#         sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+#     - name: Deploy networking addon for Pod IP assignment
+#       shell: |
+#         kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml 
+
+#     - name: Untaint controlplane node to allow workload deployment
+#       shell: |
+#         kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+
+#     - name: Print join command
+#       shell: kubeadm token create --print-join-command
+#       register: kubernetes_join_command
+
+#     - name: Copy join command to local file.
+#       local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
+
+# - name: Install Kubeadm
+#   hosts: worker
+#   gather_facts: true
+#   become: true
+#   tasks:
+#     - name: Copy join command to node
+#       copy:
+#         src: /tmp/kubernetes_join_command
+#         dest: /tmp/kubernetes_join_command
+#         mode: 0777
+
+#     - name: Execute worker join command
+#       shell: sh /tmp/kubernetes_join_command

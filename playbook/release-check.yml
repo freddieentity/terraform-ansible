@@ -1,0 +1,12 @@
+---
+- name: Install MicroK8S
+  hosts: localhost
+  gather_facts: false
+  # become: true
+  # remote_user: ci
+  tasks:
+    - name: Get Image tag and SHA
+      shell: |
+        echo "Environment: $(kubectl config current-context)"
+        kubectl get pods -o json | jq '.items[] .status.containerStatuses[] | { "image": .image, "imageID": .imageID }'
+        eval 'kubectl --namespace='{default,kube-system}' get pod;'
